@@ -1,138 +1,200 @@
 #!/usr/bin/env sh
 
 # SPDX-License-Identifier: MIT
-#  Copyright 2022 Jorengarenar
+#  Copyright 2024 Jorengarenar
 
-# -----------------------------------------------------------------------------
+# shellcheck disable=SC2016  # Expressions don't expand in single quotes, use double quotes for that.
+# shellcheck disable=SC2120  # FUNC references arguments, but none are ever passed.
 
-# global flags
-classify=0
-recursive=0
-dereference=0
-double_quote=0
-multiple_dirs=0
-no_dir_content=0
-
-# `ls` arguments (listed here just as information)
-opts=""
-args=""
-dirs=""
-hide=""
-
-# use `eval` to handle shell escapes
-alias LS='eval "ls $opts $hide $args"'
-
-# shell escape
-esceval() {
-    printf '%s\n' "$1" | sed "s/'/'\\\\''/g; 1 s/^/'/; $ s/$/'/"
-}
-
-# function to parse '.hidden' file
-getHidden() {
-    [ ! -f "$1"/.hidden ] && return
-    while IFS= read -r line; do
-        [ -n "$line" ] && printf -- ' --hide=%s' "$(esceval "$line")"
-    done < "$1"/.hidden
-}
-
-# -----------------------------------------------------------------------------
-
-# handle options
-# {{{
-while getopts "dFHLQR" opt 2> /dev/null; do
-    case "$opt" in
-        d)   no_dir_content=1 ;;
-        F)   classify=1       ;;
-        H|L) dereference=1    ;;
-        Q)   double_quote=1   ;;
-        R)   recursive=1      ;;
-        *) ;;
-    esac
-done
-
-for arg in "$@"; do
-    case "$arg" in # long options
-        "--classify"*)    classify=1        ;;
-        "--recursive")    recursive=1       ;;
-        "--dereference"*) dereference=1     ;;
-        "--quote-name")   double_quote=1    ;;
-        "--directory")    no_dir_content=1  ;;
-    esac
-    case "$arg" in # append options arguments
-        "-"|"--") ;;
-        "-"*) opts="$opts $arg" ;;
-    esac
-done
-
-if [ "$no_dir_content" = 0 ] && [ "$classify" = 0 ]; then
-    dereference=1
-fi
-# }}}
-
-# handle files/dirs
-for arg in "$@"; do
-    file=0 # flag; treat as simple file
-
-    if [ -f "$arg" ]; then
-        file=1
-    elif [ "$dereference" = 0 ] && [ -L "$arg" ]; then
-        file=1
-    elif [ -d "$arg" ] && [ "$no_dir_content" = 1 ]; then
-        file=1
-    elif [ -d "$arg" ]; then
-        if [ -n "$dirs" ] || [ -n "$args" ]; then
-            multiple_dirs=1
-        fi
-        dirs="$arg" # save directory name in case of listing only one
-    fi
-
-    if [ "$file" = 1 ]; then
-        args="$args $(esceval "$arg")" # sanitize arguments for eval
-    fi
-done
-
-# -----------------------------------------------------------------------------
-
-# list just current/working directory
-if [ -z "$args" ] && [ -z "$dirs" ]; then
-    hide="$(getHidden .)"
-    LS
+if ! ls -d --hide ~ > /dev/null 2>&1; then
+    >&2 printf '%s: %s\n' \
+        'ls.hidden' \
+        "ls without '--hide' option. Skipping processing .hidden files"
+    exec ls "$@"
 fi
 
-# list file(s) passed as CLI argument(s)
-if [ -n "$args" ]; then
-    LS
-fi
+OPTS_LIST=
+FILES_LIST=
+# DIR_LIST_1
+# DIR_LIST_2
+# DIR_LIST_...
 
-# list one directory passed as CLI argument
-if [ -n "$dirs" ] && [ "$multiple_dirs" = 0 ]; then
-    args="$(esceval "$dirs")"
-    hide="$(getHidden "$dirs")"
-    LS
-fi
+arg_counter=0
+dir_counter=0
 
-# list multiple directories passed as CLI arguments
-if [ -n "$dirs" ] && [ "$multiple_dirs" = 1 ]; then
-    [ "$double_quote" = 1 ] && dq="-Q" || dq=
+opt_a=false
+opt_R=false
+opt_d=false
 
-    for arg in "$@"; do
-        case "$arg" in
-            "-"?) continue ;; # discard options, were already handled
+found_hidden=false
+
+pre_parse_args () {
+    any_file=false
+    any_dir=false
+    any_hidden=false
+
+    for a in "$@"; do
+        case "$a" in # -I
+            --*) ;;
+            -*I*) continue ;;
         esac
 
-        if [ "$dereference" = 0 ] && [ -L "$arg" ]; then
-            continue # treating symlink to dir as file, i.e. was already handled
-        fi
+        case "$a" in # -a
+            -a|-A|-f) opt_a=true ;;
+            --all|--almost-all) opt_a=true ;;
+            --*) ;;
+            -*a*|-*A*|-*f*) opt_a=true ;;
+        esac
+        [ "$opt_a" = "true" ] && return 0
 
-        if [ -d "$arg" ]; then
-            [ -n "$args" ] && echo # new line if already something listed above
-            args="$(esceval "$arg")"
-            hide="$(getHidden "$dirs")"
+        case "$a" in # -R
+            -R|--recursive) opt_R=true ;;
+            --*) ;;
+            -*R*) opt_R=true ;;
+        esac
 
-            # no need to display dir name when `-R` option passed
-            [ "$recursive" = 0 ] && printf "%s:\n" "$(ls -d $dq "$arg")"
+        case "$a" in # -d
+            -d|--directory) opt_d=true ;;
+            --*) ;;
+            -*d*) opt_d=true ;;
+        esac
 
-            LS
+        if [ -e "$a" ]; then
+            any_file=true
+            if [ -d "$a" ]; then
+                [ -s "$a"/.hidden ] && any_hidden=true
+            fi
         fi
     done
+
+    [ "$opt_d" = "true" ] && opt_R=false
+
+    [ "$any_hidden" = "true" ] && return 1
+    [ "$opt_R" = true ] && return 1
+
+    if [ "$any_file" = "false" ] && [ "$any_dir" = "false" ]; then
+        [ -s .hidden ] && return 1
+    fi
+
+    return 0
+}
+
+push_to_list () {
+    list_name="$1" && shift
+    # shellcheck disable=SC2034
+    for a_ in "$@"; do
+        arg_counter=$((arg_counter + 1))
+        eval "$(printf 'a%d="$a_"' "$arg_counter")"
+        eval "$(printf 'list="$%s"' "$list_name")"
+        list="$(printf '%s "$a%d"' "$list" "$arg_counter")"
+        eval "$(printf '%s="$list"' "$list_name")"
+    done
+}
+
+escape_glob() {
+    printf '%s' "$1" | sed 's/[*?[]/\\&/g'
+}
+
+process_dir () {
+    dir_counter=$((dir_counter + 1))
+    dir_list="DIR_LIST_${dir_counter}"
+    push_to_list "$dir_list" "$1"
+    if [ -s "$1"/.hidden ]; then
+        found_hidden=true
+        while IFS= read -r line; do
+            [ -n "$line" ] && \
+                push_to_list "$dir_list" \
+                    '--ignore' "$(escape_glob "$line")"
+        done < "$1"/.hidden
+    fi
+    if [ "$opt_R" = "true" ]; then
+        for d in "$1"/*; do
+            [ -d "$d" ] && process_dir "$d"
+        done
+    fi
+}
+
+parse_args () {
+    long_opts_with_optargs="$(
+        # shellcheck disable=SC2010
+        (ls --helpa 2> /dev/null || COLUMNS=1000 man ls) | \
+            grep -oh '^\s*\(-[^ ], \)*--[^ ]\+[^\[]=' | \
+            tr ',=' ' ' | xargs | tr ' ' '|'
+    )"
+
+    optargs_case=
+    [ -n "$long_opts_with_optargs" ] && optargs_case="
+        case \"\$1\" in
+            $long_opts_with_optargs)
+                push_to_list OPTS_LIST \"\$1\" \"\$2\"
+                shift 2; continue  # <-- PAY ATTENTION!
+                ;;
+        esac
+    "
+
+    while [ "$#" -gt 0 ]; do
+        case "$1" in # recursion is handled manually
+            -R|--recursive) shift; continue ;;
+            --*) ;;
+            -*R*)
+                o="$(printf '%s' "$1" | tr -d 'R')"
+                shift
+                set -- "$o" "$@"
+                ;;
+        esac
+
+        # handle long style --opts that take optargs
+        [ -n "$optargs_case" ] && \
+            eval "$optargs_case"  # <-- `shift 2; continue` inside!
+
+        # segregate args into options and filenames
+        case "$1" in
+            -?*)
+                push_to_list OPTS_LIST "$1"
+                ;;
+            *)
+                if [ -d "$1" ] && [ "$opt_d" = "false" ]; then
+                    process_dir "$1"
+                else
+                    push_to_list FILES_LIST "$1"
+                fi
+                ;;
+        esac
+
+        shift
+    done
+
+    if [ -z "$FILES_LIST" ] && [ "$dir_counter" -eq 0 ]; then
+        process_dir '.'
+    fi
+
+    [ "$found_hidden" = "true" ] && return 0
+    return 1
+}
+
+ls_files () {
+    [ -z "$FILES_LIST" ] && return
+    eval set -- "$OPTS_LIST" "$FILES_LIST"
+    ls "$@"
+    [ "$dir_counter" -gt 0 ] && echo
+}
+
+ls_dirs () {
+    i=0
+    while [ "$i" -lt "$dir_counter" ]; do
+        i=$((i+1))
+        eval "$(printf 'list="$DIR_LIST_%d"' "$i")"
+        eval set -- "$list" "$OPTS_LIST"
+
+        [ "$dir_counter" -gt 1 ] && printf '%s:\n' "$1" | tr -s /
+        ls "$@"
+        [ "$i" -lt "$dir_counter" ] && echo
+    done
+}
+
+if pre_parse_args "$@" || ! parse_args "$@"; then
+    exec ls "$@"
 fi
+
+ls_files
+ls_dirs

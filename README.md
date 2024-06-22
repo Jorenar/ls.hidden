@@ -1,3 +1,4 @@
 ls.hidden
 =========
-A `ls` wrapper respecting .hidden files
+
+A wrapper over GNU `ls` capable of using `.hidden` files
