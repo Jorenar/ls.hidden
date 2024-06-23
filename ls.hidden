@@ -23,6 +23,9 @@ opt_a=false
 opt_R=false
 opt_d=false
 
+multiple_dirs=false
+nl=  # part of format string for printing dir name when e.g. -R
+
 pre_parse_args () {
     any_file=false
     any_dir=false
@@ -67,6 +70,7 @@ pre_parse_args () {
             --*) ;;
             -*R*) opt_R=true ;;
         esac
+        [ "$opt_R" = "true" ] && multiple_dirs=true
 
         case "$a" in # -d
             -d|--directory) opt_d=true ;;
@@ -114,11 +118,18 @@ process_dir () {
 
     eval set -- "$OPTS_LIST" "$HIDE_LIST" '--' '"$dir"'
 
-    [ "$opt_R" = "true" ] && \
-        printf '\n%s:\n' "$dir" | tr -s '/'
+    [ "$multiple_dirs" = "true" ] && \
+        printf "$nl"'%s:\n' "$dir"
     ls "$@"
 
+    nl='\n'
+
     [ "$opt_R" = "false" ] && return
+
+    # strip trailing '/'
+    while [ "$dir" != "${dir%/}" ]; do
+        dir="${dir%/}"
+    done
 
     for d in "$dir"/*; do
         [ ! -d "$d" ] && continue
@@ -208,9 +219,14 @@ fi
 if [ -n "$FILES_LIST" ]; then
     eval set -- "$OPTS_LIST" '--' "$FILES_LIST"
     ls "$@"
+    nl='\n'
 fi
 
-eval set -- "$DIRS_LIST"
-for dir in "$@"; do
-    process_dir "$dir"
-done
+if [ -n "$DIRS_LIST" ]; then
+    eval set -- "$DIRS_LIST"
+    [ "$#" -gt 1 ] && multiple_dirs=true
+
+    for dir in "$@"; do
+        process_dir "$dir"
+    done
+fi
