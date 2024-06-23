@@ -99,7 +99,7 @@ process_dir () {
         done < "$dir"/.hidden
     fi
 
-    eval set -- "$OPTS_LIST" "$dir" "$HIDE_LIST"
+    eval set -- "$OPTS_LIST" '"$dir"' "$HIDE_LIST"
 
     [ "$opt_R" = "true" ] && \
         printf '\n%s:\n' "$dir" | tr -s '/'
