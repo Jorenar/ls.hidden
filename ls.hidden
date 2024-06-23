@@ -28,7 +28,27 @@ pre_parse_args () {
     any_dir=false
     any_hidden=false
 
+    opts_ended=false
     for a in "$@"; do
+        if [ "$a" = "--" ]; then
+            opts_ended=true
+            continue
+        fi
+
+        while [ -e "$a" ]; do  # pseudo-`goto` workaround
+            case "$a" in
+                -?*) [ "$opts_ended" = "false" ] && break ;;
+            esac
+
+            any_file=true
+            if [ -d "$a" ]; then
+                [ -s "$a"/.hidden ] && any_hidden=true
+            fi
+            break
+        done
+
+        [ "$opts_ended" = "true" ] && continue
+
         case "$a" in # -I
             --*) ;;
             -*I*) continue ;;
@@ -53,13 +73,6 @@ pre_parse_args () {
             --*) ;;
             -*d*) opt_d=true ;;
         esac
-
-        if [ -e "$a" ]; then
-            any_file=true
-            if [ -d "$a" ]; then
-                [ -s "$a"/.hidden ] && any_hidden=true
-            fi
-        fi
     done
 
     [ "$opt_d" = "true" ] && opt_R=false
@@ -99,7 +112,7 @@ process_dir () {
         done < "$dir"/.hidden
     fi
 
-    eval set -- "$OPTS_LIST" '"$dir"' "$HIDE_LIST"
+    eval set -- "$OPTS_LIST" "$HIDE_LIST" '--' '"$dir"'
 
     [ "$opt_R" = "true" ] && \
         printf '\n%s:\n' "$dir" | tr -s '/'
@@ -121,44 +134,51 @@ parse_args () {
     )"
 
     optargs_case=
-    [ -n "$long_opts_with_optargs" ] && optargs_case="
-    case \"\$1\" in
-        $long_opts_with_optargs)
-            push_to_list OPTS_LIST \"\$1\" \"\$2\"
-            shift 2; continue  # <-- PAY ATTENTION!
-            ;;
-    esac
-    "
+    [ -n "$long_opts_with_optargs" ] && \
+        optargs_case="
+            case \"\$1\" in
+                $long_opts_with_optargs)
+                    push_to_list OPTS_LIST \"\$1\" \"\$2\"
+                    shift 2; continue  # <-- PAY ATTENTION!
+                    ;;
+            esac
+        "
 
+    opts_ended=false
     while [ "$#" -gt 0 ]; do
-        case "$1" in # recursion is handled manually
-            -R|--recursive) shift; continue ;;
-            --*) ;;
-            -*R*)
-                o="$(printf '%s' "$1" | tr -d 'R')"
-                shift
-                set -- "$o" "$@"
-                ;;
-        esac
+        if [ "$1" = "--" ]; then
+            opts_ended=true
+            shift
+            continue
+        fi
 
-        # handle long style --opts that take optargs
-        [ -n "$optargs_case" ] && \
-            eval "$optargs_case"  # <-- `shift 2; continue` inside!
+        if [ "$opts_ended" = "false" ]; then
+            case "$1" in # recursion is handled manually
+                -R|--recursive) shift; continue ;;
+                --*) ;;
+                -*R*)
+                    o="$(printf '%s' "$1" | tr -d 'R')"
+                    shift
+                    set -- "$o" "$@"
+                    ;;
+            esac
 
-        # segregate args into options and filenames
-        case "$1" in
-            -?*)
-                push_to_list OPTS_LIST "$1"
-                ;;
-            *)
-                if [ -d "$1" ] && [ "$opt_d" = "false" ]; then
-                    push_to_list DIRS_LIST "$1"
-                else
-                    push_to_list FILES_LIST "$1"
-                fi
-                ;;
-        esac
+            [ -n "$optargs_case" ] && eval "$optargs_case"
+            # attention: `shift 2; continue` inside $optargs_case
 
+            case "$1" in
+                -?*)
+                    push_to_list OPTS_LIST "$1"
+                    shift; continue
+                    ;;
+            esac
+        fi
+
+        if [ -d "$1" ] && [ "$opt_d" = "false" ]; then
+            push_to_list DIRS_LIST "$1"
+        else
+            push_to_list FILES_LIST "$1"
+        fi
         shift
     done
 
@@ -183,7 +203,7 @@ if [ -n "$OPTS_LIST" ]; then
 fi
 
 if [ -n "$FILES_LIST" ]; then
-    eval set -- "$OPTS_LIST" "$FILES_LIST"
+    eval set -- "$OPTS_LIST" '--' "$FILES_LIST"
     ls "$@"
 fi
 
