@@ -121,7 +121,10 @@ process_dir () {
     [ "$opt_R" = "false" ] && return
 
     for d in "$dir"/*; do
-        [ -d "$d" ] && process_dir "$d"
+        [ ! -d "$d" ] && continue
+        [ -s "$d"/../.hidden ] && \
+            grep -q -F -- "$(basename -- "$d")" "$d"/../.hidden && continue
+        process_dir "$d"
     done
 }
 
