@@ -6,27 +6,22 @@
 # shellcheck disable=SC2016  # Expressions don't expand in single quotes, use double quotes for that.
 # shellcheck disable=SC2120  # FUNC references arguments, but none are ever passed.
 
-if ! ls -d --hide ~ > /dev/null 2>&1; then
+if ! ls -d --ignore ~ /dev/null > /dev/null 2>&1; then
     >&2 printf '%s: %s\n' \
         'ls.hidden' \
-        "ls without '--hide' option. Skipping processing .hidden files"
+        "ls without '--ignore' option. Skipping processing .hidden files"
     exec ls "$@"
 fi
 
 OPTS_LIST=
 FILES_LIST=
-# DIR_LIST_1
-# DIR_LIST_2
-# DIR_LIST_...
+DIRS_LIST=
 
 arg_counter=0
-dir_counter=0
 
 opt_a=false
 opt_R=false
 opt_d=false
-
-found_hidden=false
 
 pre_parse_args () {
     any_file=false
@@ -91,45 +86,48 @@ push_to_list () {
     done
 }
 
-escape_glob() {
-    printf '%s' "$1" | sed 's/[*?[]/\\&/g'
-}
-
 process_dir () {
-    dir_counter=$((dir_counter + 1))
-    dir_list="DIR_LIST_${dir_counter}"
-    push_to_list "$dir_list" "$1"
-    if [ -s "$1"/.hidden ]; then
-        found_hidden=true
+    dir="$1"
+
+    HIDE_LIST=
+    if [ -s "$dir"/.hidden ]; then
         while IFS= read -r line; do
             [ -n "$line" ] && \
-                push_to_list "$dir_list" \
-                    '--ignore' "$(escape_glob "$line")"
-        done < "$1"/.hidden
+                push_to_list "HIDE_LIST" \
+                    '--ignore' \
+                    "$(printf '%s' "$line" | sed 's/[*?[]/\\&/g')"
+        done < "$dir"/.hidden
     fi
-    if [ "$opt_R" = "true" ]; then
-        for d in "$1"/*; do
-            [ -d "$d" ] && process_dir "$d"
-        done
-    fi
+
+    eval set -- "$OPTS_LIST" "$dir" "$HIDE_LIST"
+
+    [ "$opt_R" = "true" ] && \
+        printf '\n%s:\n' "$dir" | tr -s '/'
+    ls "$@"
+
+    [ "$opt_R" = "false" ] && return
+
+    for d in "$dir"/*; do
+        [ -d "$d" ] && process_dir "$d"
+    done
 }
 
 parse_args () {
     long_opts_with_optargs="$(
         # shellcheck disable=SC2010
-        (ls --helpa 2> /dev/null || COLUMNS=1000 man ls) | \
+        (ls --help 2> /dev/null || COLUMNS=1000 man ls) | \
             grep -oh '^\s*\(-[^ ], \)*--[^ ]\+[^\[]=' | \
             tr ',=' ' ' | xargs | tr ' ' '|'
     )"
 
     optargs_case=
     [ -n "$long_opts_with_optargs" ] && optargs_case="
-        case \"\$1\" in
-            $long_opts_with_optargs)
-                push_to_list OPTS_LIST \"\$1\" \"\$2\"
-                shift 2; continue  # <-- PAY ATTENTION!
-                ;;
-        esac
+    case \"\$1\" in
+        $long_opts_with_optargs)
+            push_to_list OPTS_LIST \"\$1\" \"\$2\"
+            shift 2; continue  # <-- PAY ATTENTION!
+            ;;
+    esac
     "
 
     while [ "$#" -gt 0 ]; do
@@ -154,7 +152,7 @@ parse_args () {
                 ;;
             *)
                 if [ -d "$1" ] && [ "$opt_d" = "false" ]; then
-                    process_dir "$1"
+                    push_to_list DIRS_LIST "$1"
                 else
                     push_to_list FILES_LIST "$1"
                 fi
@@ -164,37 +162,32 @@ parse_args () {
         shift
     done
 
-    if [ -z "$FILES_LIST" ] && [ "$dir_counter" -eq 0 ]; then
-        process_dir '.'
+    if [ -z "${FILES_LIST}${DIRS_LIST}" ]; then
+        if [ "$opt_d" = "true" ]; then
+            push_to_list FILES_LIST '.'
+        else
+            push_to_list DIRS_LIST '.'
+        fi
     fi
-
-    [ "$found_hidden" = "true" ] && return 0
-    return 1
 }
 
-ls_files () {
-    [ -z "$FILES_LIST" ] && return
-    eval set -- "$OPTS_LIST" "$FILES_LIST"
-    ls "$@"
-    [ "$dir_counter" -gt 0 ] && echo
-}
 
-ls_dirs () {
-    i=0
-    while [ "$i" -lt "$dir_counter" ]; do
-        i=$((i+1))
-        eval "$(printf 'list="$DIR_LIST_%d"' "$i")"
-        eval set -- "$list" "$OPTS_LIST"
-
-        [ "$dir_counter" -gt 1 ] && printf '%s:\n' "$1" | tr -s /
-        ls "$@"
-        [ "$i" -lt "$dir_counter" ] && echo
-    done
-}
-
-if pre_parse_args "$@" || ! parse_args "$@"; then
+if pre_parse_args "$@"; then
     exec ls "$@"
 fi
 
-ls_files
-ls_dirs
+parse_args "$@"
+
+if [ -n "$OPTS_LIST" ]; then
+    eval ls "$OPTS_LIST" /dev/null > /dev/null || exit $?
+fi
+
+if [ -n "$FILES_LIST" ]; then
+    eval set -- "$OPTS_LIST" "$FILES_LIST"
+    ls "$@"
+fi
+
+eval set -- "$DIRS_LIST"
+for dir in "$@"; do
+    process_dir "$dir"
+done
