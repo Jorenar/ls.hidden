@@ -106,17 +106,16 @@ push_to_list () {
 process_dir () {
     dir="$1"
 
-    HIDE_LIST=
+    eval set -- "$OPTS_LIST"
     if [ -s "$dir"/.hidden ]; then
-        while IFS= read -r line; do
-            [ -n "$line" ] && \
-                push_to_list "HIDE_LIST" \
-                    '--ignore' \
-                    "$(printf '%s' "$line" | sed 's/[*?[]/\\&/g')"
-        done < "$dir"/.hidden
+        eval set -- '"$@"' $(sed \
+            -e '/^[[:space:]]*$/d' \
+            -e "s/'/'\\\\''/g; s/^/'/; s/$/'/" \
+            -e 's/^/--ignore /' \
+            "$dir"/.hidden
+        )
     fi
-
-    eval set -- "$OPTS_LIST" "$HIDE_LIST" '--' '"$dir"'
+    set -- "$@" '--' "$dir"
 
     [ "$multiple_dirs" = "true" ] && \
         printf "$nl"'%s:\n' "$dir"
