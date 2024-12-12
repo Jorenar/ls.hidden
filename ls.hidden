@@ -132,8 +132,8 @@ process_dir () {
 
     for d in "$dir"/*; do
         [ ! -d "$d" ] && continue
-        [ -s "$d"/../.hidden ] && \
-            grep -q -F -- "$(basename -- "$d")" "$d"/../.hidden && continue
+        [ -s "$(dirname "$d")"/.hidden ] && \
+            grep -q -F -- "$(basename -- "$d")" "$(dirname "$d")"/.hidden && continue
         process_dir "$d"
     done
 }
